@@ -1,6 +1,8 @@
 #![cfg_attr(bevy_lint, feature(register_tool), register_tool(bevy))]
 #![cfg_attr(not(feature = "dev"), windows_subsystem = "windows")]
 
+mod game;
+
 use bevy::{asset::AssetMetaCheck, prelude::*};
 
 fn main() -> AppExit {
@@ -28,7 +30,7 @@ impl Plugin for AppPlugin {
                 }),
         );
 
-        app.add_plugins(());
+        app.add_plugins(game::plugin);
 
         app.insert_resource(ClearColor(Color::srgb_u8(0x45, 0x2b, 0x1d)));
 
