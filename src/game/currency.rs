@@ -3,6 +3,8 @@ use bevy::prelude::*;
 const GREEN: Color = Color::srgb_u8(0x5c, 0xe0, 0x5c);
 
 const POP_SECS: f32 = 0.8;
+/// Pop rise speed in pixels per second.
+const RISE: f32 = 150.;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<Currencies>()
@@ -35,16 +37,16 @@ fn usd_counter() -> impl Scene {
     }
 }
 
-/// Chiming $ icon that rises, wobbles and fades out.
-pub(super) fn usd_pop() -> impl Scene {
+/// Chiming `+usd$` that rises, wobbles and fades out.
+pub(super) fn usd_pop(usd: u64) -> impl Scene {
+    let text = format!("+{usd}$");
     bsn! {
         #UsdPop
         UsdPop
         AudioPlayer("audio/coin.wav")
-        Text2d("$")
+        Text2d(text)
         TextFont { font_size: FontSize::Px(48.) }
         TextColor(GREEN)
-        Transform { translation: {vec3(0., 90., 1.)} }
     }
 }
 
@@ -56,7 +58,8 @@ fn float_usd(
     for (entity, mut pop, mut transform, mut color) in &mut pops {
         pop.0 += time.delta_secs();
         let t = pop.0 / POP_SECS;
-        transform.translation = vec3((pop.0 * 18.).sin() * 12., 90. + t * 120., 1.);
+        transform.translation.x = (pop.0 * 18.).sin() * 12.;
+        transform.translation.y += RISE * time.delta_secs();
         color.0 = GREEN.with_alpha(1. - t);
         if t >= 1. {
             commands.entity(entity).despawn();

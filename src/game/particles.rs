@@ -35,7 +35,7 @@ fn burst(
     camera: Single<(&Camera, &GlobalTransform)>,
     mut commands: Commands,
 ) -> Result {
-    if !windows.contains(click.entity) {
+    if !windows.contains(click.original_event_target()) {
         return Ok(());
     }
     let at = camera.0.viewport_to_world_2d(camera.1, click.pointer.position)?;
