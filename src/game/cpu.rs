@@ -1,4 +1,5 @@
 use bevy::{prelude::*, sprite::Anchor};
+use rand::{Rng, seq::IndexedRandom};
 
 use super::{
     currency::{Currencies, usd_pop},
@@ -34,19 +35,20 @@ const SPOTS: [(f32, f32, f32, f32); 6] = [
     (-60., 52., 6., 4.),
     (96., -54., 12., 5.),
 ];
-const SCREWS: [(f32, f32); 4] = [(-94., -125.), (94., -125.), (-94., -301.), (94., -301.)];
+const MODELS: [&str; 8] = ["DC4004", "DC8008", "DC8080", "DC6502", "DC6800", "DC8086", "DC1802", "DC2650"];
 
-/// Grid cell taken by one CPU with its display and rising pops.
-const CELL: Vec2 = vec2(300., 400.);
-/// Middle of the CPU's drawing, relative to its origin.
-const CENTER: Vec2 = vec2(0., -122.);
-/// ROM slots per CPU, the max program length.
-const ROM: usize = 4;
+/// Grid cell taken by one CPU with the tallest display and rising pops.
+const CELL: Vec2 = vec2(300., 440.);
+/// Middle of the tallest CPU's drawing, relative to its origin.
+const CENTER: Vec2 = vec2(0., -155.);
 const BOOT: Instruction = (Op::Add, 1);
+const BOOT_SPEC: Spec = Spec { model: "DC4004", rom: 4, clock: 1. };
 const SHAKE_SECS: f32 = 0.35;
+/// Pointer travel in pixels that turns a click into a drag.
+const DRAG_SLOP: f32 = 8.;
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(Startup, (|| cpu(0)).spawn())
+    app.add_systems(Startup, (|| cpu(0, BOOT_SPEC)).spawn())
         .add_systems(Update, (work, arrange, show_slots));
 }
 
@@ -58,6 +60,27 @@ pub(super) enum Op {
 
 /// Opcode and its operand.
 pub(super) type Instruction = (Op, u64);
+
+/// CPU model and stats.
+#[derive(Clone, Copy)]
+pub(super) struct Spec {
+    pub(super) model: &'static str,
+    /// ROM slots, the max program length.
+    pub(super) rom: usize,
+    /// Jobs per second.
+    pub(super) clock: f32,
+}
+
+impl Spec {
+    pub(super) fn random() -> Self {
+        let mut rng = rand::rng();
+        Spec {
+            model: MODELS.choose(&mut rng).unwrap(),
+            rom: rng.random_range(2..=6),
+            clock: rng.random_range(2..=8) as f32 / 4.,
+        }
+    }
+}
 
 #[derive(Component, FromTemplate)]
 pub(super) struct Cpu {
@@ -73,29 +96,44 @@ pub(super) struct Cpu {
     fill: Entity,
     /// Seconds left of the shake refusing a click without a program.
     shake: f32,
+    /// Screen distance the player dragged the CPU while reordering.
+    drag: Vec2,
+    /// Grid position the CPU rests at.
+    home: Vec2,
 }
 
 /// ROM slot of a CPU, shown as a display row. Jobs run the slots' instructions top to bottom.
 #[derive(Component, Default, Clone)]
 pub(super) struct Socket(pub(super) Option<Instruction>);
 
-/// DIP-40 CPU wired to a green phosphor display listing its ROM slots. Only the first CPU boots with a program.
-pub(super) fn cpu(index: usize) -> impl Scene {
-    let pins = (0..40).map(|i| pin(i, (i * 5 + index * 3) % 7 == 0)).collect::<Vec<_>>();
+/// DIP-40 CPU printed with its model and clock, wired to a green phosphor display listing its ROM slots.
+/// Only the first CPU boots with a program.
+pub(super) fn cpu(index: usize, spec: Spec) -> impl Scene {
+    let screen = 32. * spec.rom as f32 + 28.;
+    let print = format!("{}\n{}Hz", spec.model, spec.clock);
+    let label = format!("ROM {}", spec.rom);
+    let pins = (0..40).map(|i| pin(i, (i * 5 + index * 3).is_multiple_of(7))).collect::<Vec<_>>();
     let spots = SPOTS.into_iter().map(|(x, y, w, h)| rect(RUST, w, h, x, y, 0.05)).collect::<Vec<_>>();
     let cable = (0..14)
         .map(|i| rect([WIRE, CABLE, PIN][if i == 0 { 0 } else { 1 + i % 2 }], 8., 24., -52. + 8. * i as f32, -109., -0.2))
         .collect::<Vec<_>>();
-    let screws = SCREWS.into_iter().map(|(x, y)| rect(PIN, 5., 5., x, y, 0.1)).collect::<Vec<_>>();
-    let numbers = (0..ROM).map(|i| text(format!("{i:02}"), DIM, 18., -80., row_y(i))).collect::<Vec<_>>();
-    let sockets = (0..ROM).map(|i| socket(i, (index == 0 && i == 0).then_some(BOOT))).collect::<Vec<_>>();
-    let scanlines = (0..39).map(|i| rect(SCAN, 180., 1.5, 0., -131. - 4. * i as f32, 0.9)).collect::<Vec<_>>();
+    let screws = [(-94., -125.), (94., -125.), (-94., -145. - screen), (94., -145. - screen)]
+        .into_iter()
+        .map(|(x, y)| rect(PIN, 5., 5., x, y, 0.1))
+        .collect::<Vec<_>>();
+    let numbers = (0..spec.rom).map(|i| text(format!("{i:02}"), DIM, 18., -80., row_y(i))).collect::<Vec<_>>();
+    let sockets = (0..spec.rom).map(|i| socket(i, (index == 0 && i == 0).then_some(BOOT))).collect::<Vec<_>>();
+    let scanlines = (0..(screen / 4.) as usize)
+        .map(|i| rect(SCAN, 180., 1.5, 0., -131. - 4. * i as f32, 0.9))
+        .collect::<Vec<_>>();
     bsn! {
         #Cpu
-        Cpu { index, clock: 1., steps: 8, fill: #ProgressFill }
-        Transform { scale: {Vec3::ZERO} }
+        Cpu { index, clock: {spec.clock}, steps: 8, fill: #ProgressFill }
+        Transform { scale: {vec3(0., 0., 1.)} }
         Visibility
         on(click)
+        on(hold)
+        on(place)
         Children [
             #Chip
             @rect(BODY, 420., 130., 0., -42., 0.)
@@ -120,7 +158,7 @@ pub(super) fn cpu(index: usize) -> impl Scene {
                 --
                 @rect(DARK, 10., 10., -185., -45., 0.1)
                 --
-                @text("DC4004\n8213", PRINT, 16., -185., 0.)
+                @text(print, PRINT, 22., -185., 0.)
                 --
                 {pins}
                 --
@@ -128,24 +166,24 @@ pub(super) fn cpu(index: usize) -> impl Scene {
             ]
             --
             #Display
-            @rect(BEZEL, 196., 184., 0., -213., 0.)
+            @rect(BEZEL, 196., screen + 28., 0., -135. - screen / 2., 0.)
             Pickable
             --
-            @rect(DARK, 184., 160., 0., -207., 0.1)
+            @rect(DARK, 184., screen + 4., 0., -129. - screen / 2., 0.1)
             --
-            @rect(SCREEN, 180., 156., 0., -207., 0.2)
+            @rect(SCREEN, 180., screen, 0., -129. - screen / 2., 0.2)
             --
             @rect(GLARE, 70., 30., -45., -150., 0.95)
             --
-            @text("DC-MON", PRINT, 10., -84., -295.)
+            @text(label, PRINT, 12., -84., -139. - screen)
             --
-            @rect(GREEN, 8., 5., 82., -295., 0.1)
+            @rect(GREEN, 8., 5., 82., -139. - screen, 0.1)
             --
             #ProgressBar
-            @rect(ROW, 168., 8., 0., -273., 0.3)
+            @rect(ROW, 168., 8., 0., -117. - screen, 0.3)
             --
             #ProgressFill
-            @rect(GREEN, 168., 8., -84., -273., 0.4)
+            @rect(GREEN, 168., 8., -84., -117. - screen, 0.4)
             Anchor::CENTER_LEFT
             Transform { scale: {vec3(0., 1., 1.)} }
             --
@@ -219,7 +257,8 @@ fn show_slots(sockets: Query<(&Socket, &Children), Changed<Socket>>, mut texts: 
     Ok(())
 }
 
-/// Squashes the CPU, ticks and starts a job, or shakes and buzzes without a program. Ignored while a job runs.
+/// Squashes the CPU, ticks and starts a job, or shakes and buzzes without a program.
+/// Ignored while a job runs and at the end of a drag.
 fn click(
     click: On<PointerClick>,
     mut commands: Commands,
@@ -227,7 +266,7 @@ fn click(
     sockets: Query<&Socket>,
 ) -> Result {
     let (mut cpu, mut transform, children) = cpus.get_mut(click.entity)?;
-    if cpu.job.is_some() {
+    if cpu.job.is_some() || cpu.drag.length() > DRAG_SLOP {
         return Ok(());
     }
     if !children.iter().any(|child| sockets.get(child).is_ok_and(|socket| socket.0.is_some())) {
@@ -235,9 +274,31 @@ fn click(
         commands.spawn_scene(bsn! { AudioPlayer("audio/error.wav") PlaybackSettings::DESPAWN });
         return Ok(());
     }
-    transform.scale *= 0.9;
+    transform.scale *= vec3(0.9, 0.9, 1.);
     cpu.job = Some(0.);
     commands.spawn_scene(bsn! { AudioPlayer("audio/click.wav") PlaybackSettings::DESPAWN });
+    Ok(())
+}
+
+fn hold(drag: On<PointerDrag>, mut cpus: Query<&mut Cpu>) -> Result {
+    cpus.get_mut(drag.entity)?.drag = drag.distance;
+    Ok(())
+}
+
+/// Drops the held CPU into the nearest grid cell, swapping places with the CPU there.
+fn place(drag: On<PointerDragEnd>, mut cpus: Query<(Entity, &mut Cpu)>) -> Result {
+    let (_, held) = cpus.get(drag.entity)?;
+    let at = held.home + vec2(held.drag.x, -held.drag.y);
+    let nearest = cpus
+        .iter()
+        .min_by(|(_, a), (_, b)| a.home.distance(at).total_cmp(&b.home.distance(at)))
+        .map(|(entity, _)| entity);
+    if let Some(nearest) = nearest
+        && let Ok([(_, mut held), (_, mut other)]) = cpus.get_many_mut([drag.entity, nearest])
+    {
+        std::mem::swap(&mut held.index, &mut other.index);
+    }
+    cpus.get_mut(drag.entity)?.1.drag = Vec2::ZERO;
     Ok(())
 }
 
@@ -269,26 +330,29 @@ fn work(
             });
         if usd > 0 {
             currencies.usd += usd;
-            commands.entity(entity).queue_spawn_related_scenes::<Children>(bsn_list! { @usd_pop(usd) Transform { translation: {vec3(0., 30., 1.)} } });
+            commands
+                .entity(entity)
+                .queue_spawn_related_scenes::<Children>(bsn_list! { @usd_pop(usd) Transform { translation: {vec3(0., 30., 1.)} } });
         }
     }
     Ok(())
 }
 
-/// Fits all CPUs into a grid left of the shop and eases them there, undoing click squashes and shaking refusals.
+/// Fits all CPUs into a grid between the shops and eases them there, following drags and shaking refusals.
+/// Keeps z and z scale fixed: Bevy 0.20 draws sprites in the z order they first rendered with.
 fn arrange(time: Res<Time>, window: Single<&Window>, mut cpus: Query<(&mut Cpu, &mut Transform)>) {
     let n = cpus.iter().count();
-    let area = vec2(window.width() - SHOP_W, window.height());
+    let area = vec2(window.width() - 2. * SHOP_W, window.height());
     let fit = |cols: usize| (area / CELL / vec2(cols as f32, n.div_ceil(cols) as f32)).min_element().min(1.);
     let cols = (1..=n).max_by(|&a, &b| fit(a).total_cmp(&fit(b))).unwrap_or(1);
     let (rows, scale) = (n.div_ceil(cols) as f32, fit(cols));
     for (mut cpu, mut transform) in &mut cpus {
         cpu.shake = (cpu.shake - time.delta_secs()).max(0.);
         let (col, row) = ((cpu.index % cols) as f32, (cpu.index / cols) as f32);
-        let cell = vec2(col - (cols - 1) as f32 / 2., (rows - 1.) / 2. - row);
-        let shake = vec2((cpu.shake * 60.).sin() * cpu.shake * 120., 0.);
-        let target = ((cell * CELL - CENTER) * scale - vec2(SHOP_W / 2., 0.) + shake).extend(0.);
+        cpu.home = (vec2(col - (cols - 1) as f32 / 2., (rows - 1.) / 2. - row) * CELL - CENTER) * scale;
+        let shake = (cpu.shake * 60.).sin() * cpu.shake * 120.;
+        let target = (cpu.home + vec2(shake + cpu.drag.x, -cpu.drag.y)).extend(0.);
         transform.translation.smooth_nudge(&target, 12., time.delta_secs());
-        transform.scale.smooth_nudge(&Vec3::splat(scale), 12., time.delta_secs());
+        transform.scale.smooth_nudge(&vec3(scale, scale, 1.), 12., time.delta_secs());
     }
 }
