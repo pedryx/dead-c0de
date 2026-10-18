@@ -1,5 +1,6 @@
 use bevy::{audio::Volume, prelude::*, sprite::Anchor};
 
+mod background;
 pub mod board;
 #[cfg(feature = "dev")]
 pub mod cheats;
@@ -18,6 +19,7 @@ const AMBER: Color = hex("#ffb000");
 
 pub fn plugin(app: &mut App) {
     app.add_plugins((
+        background::plugin,
         board::plugin,
         cpu::plugin,
         currencies::plugin,
