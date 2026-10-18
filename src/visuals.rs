@@ -7,6 +7,7 @@ pub mod cheats;
 pub mod cpu;
 pub mod currencies;
 pub mod particles;
+pub mod progression;
 pub mod shop;
 
 const RUST: Color = hex("#8b3a1a");
@@ -24,6 +25,7 @@ pub fn plugin(app: &mut App) {
         cpu::plugin,
         currencies::plugin,
         particles::plugin,
+        progression::plugin,
         shop::plugin,
     ));
 }

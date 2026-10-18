@@ -4,6 +4,7 @@ use super::{
     board::{Board, BoardSlot, make_room},
     cpu::{Cpu, Instruction, Opcode, Rom, RomSlot, cpu},
     currencies::Currencies,
+    progression::{Locked, Unlock},
 };
 use crate::{
     interaction::Draggable,
@@ -61,9 +62,10 @@ fn instruction_shop() -> impl Scene {
     let cards = bsn_list! {
         @shop_item(Offer::Instruction(Instruction(Opcode::Add, 1)), 5)
         --
-        @shop_item(Offer::Instruction(Instruction(Opcode::Mul, 2)), 20)
+        @shop_item(Offer::Instruction(Instruction(Opcode::Mul, 2)), 30)
+        Locked({vec![Unlock::Usd(20), Unlock::Instructions(Opcode::Add, 3)]})
     };
-    bsn! { #InstructionShop @instruction_shop_visuals(cards) }
+    bsn! { #InstructionShop Locked({vec![Unlock::Usd(3)]}) @instruction_shop_visuals(cards) }
 }
 
 /// Shop selling random CPUs.
@@ -74,7 +76,11 @@ fn hardware_shop() -> impl Scene {
             shop_item(Offer::Cpu(cpu), cpu_price(cpu, 1))
         })
         .collect::<Vec<_>>();
-    bsn! { #HardwareShop @hardware_shop_visuals(cards, reroll_button()) }
+    bsn! {
+        #HardwareShop
+        Locked({vec![Unlock::Usd(50), Unlock::FullRom]})
+        @hardware_shop_visuals(cards, reroll_button())
+    }
 }
 
 /// Card selling `offer` for `price` USD.

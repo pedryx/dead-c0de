@@ -5,6 +5,7 @@ use crate::{
     game::{
         cpu::{Rom, RomSlot},
         currencies::Currencies,
+        progression::Locked,
         shop::{CannotAfford, Offer, Price, Purchased},
     },
     interaction::Draggable,
@@ -13,9 +14,21 @@ use crate::{
 const SLOT_HIGHLIGHT: Color = hex("#17502a");
 /// Screen width taken by each shop.
 pub const SHOP_WIDTH: f32 = 300.;
+/// How long an unlocked shop or card takes to fade in, in seconds.
+const REVEAL_SECONDS: f32 = 0.6;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, (label_cards, show_prices, drag_cards))
+    app.add_systems(
+        Update,
+        (
+            label_cards,
+            show_prices,
+            drag_cards,
+            hide_locked,
+            reveal.after(show_prices),
+            fit_shops,
+        ),
+    )
         .add_observer(highlight_slot)
         .add_observer(unhighlight_slot)
         .add_observer(play_lift_sound)
@@ -32,6 +45,14 @@ struct ShopItemText {
     detail: Entity,
     price: Entity,
 }
+
+/// Seconds the shop or card has been fading in since it was unlocked.
+#[derive(Component, Default, Clone)]
+struct Reveal(f32);
+
+/// Height the shop is shown at, in pixels, following its content as it grows.
+#[derive(Component, Default, Clone)]
+struct ShownHeight(f32);
 
 /// Instruction shop window on the right.
 pub fn instruction_shop_visuals(cards: impl SceneList) -> impl Scene {
@@ -63,6 +84,7 @@ pub fn hardware_shop_visuals(cards: impl SceneList, reroll: impl Scene) -> impl 
 pub fn shop_item_visuals() -> impl Scene {
     bsn! {
         ShopItemText { name: #Name, detail: #Detail, price: #Price }
+        Reveal
         Node {
             justify_content: JustifyContent::SpaceBetween,
             align_items: AlignItems::Center,
@@ -95,6 +117,8 @@ fn terminal(prompt: &'static str, left: bool, body: impl SceneList) -> impl Scen
         (Val::Auto, px(16.))
     };
     bsn! {
+        Reveal
+        ShownHeight
         Node {
             position_type: PositionType::Absolute,
             top: px(64.),
@@ -103,6 +127,7 @@ fn terminal(prompt: &'static str, left: bool, body: impl SceneList) -> impl Scen
             width: px(SHOP_WIDTH - 32.),
             flex_direction: FlexDirection::Column,
             border: UiRect::all(px(4.)),
+            overflow: Overflow::clip_y(),
         }
         BackgroundColor(SCREEN)
         BorderColor::all(BEZEL)
@@ -168,10 +193,78 @@ fn show_prices(
     Ok(())
 }
 
-/// Moves dragged cards with the pointer.
-fn drag_cards(mut cards: Query<(&Draggable, &mut UiTransform), Changed<Draggable>>) {
-    for (draggable, mut transform) in &mut cards {
+/// Moves dragged cards with the pointer, out of their shop's clip.
+fn drag_cards(
+    mut commands: Commands,
+    mut cards: Query<(Entity, &Draggable, &mut UiTransform), Changed<Draggable>>,
+) {
+    for (card, draggable, mut transform) in &mut cards {
         transform.translation = Val2::px(draggable.distance.x, draggable.distance.y);
+        if draggable.dragging() {
+            commands.entity(card).insert(OverrideClip);
+        } else {
+            commands.entity(card).remove::<OverrideClip>();
+        }
+    }
+}
+
+/// Hides locked shops and cards.
+fn hide_locked(mut nodes: Query<&mut Node, Added<Locked>>) {
+    for mut node in &mut nodes {
+        node.display = Display::None;
+    }
+}
+
+/// Shows unlocked shops and cards, fading them in.
+fn reveal(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut revealed: Query<(Entity, &mut Reveal, &mut Node), Without<Locked>>,
+    children: Query<&Children>,
+    mut colors: Query<AnyOf<(&mut BackgroundColor, &mut BorderColor, &mut TextColor)>>,
+) {
+    for (entity, mut reveal, mut node) in &mut revealed {
+        let alpha = (reveal.0 / REVEAL_SECONDS).min(1.);
+        reveal.0 += time.delta_secs();
+        node.display = Display::Flex;
+        for part in children.iter_descendants(entity).chain([entity]) {
+            let Ok((background, border, text)) = colors.get_mut(part) else {
+                continue;
+            };
+            if let Some(mut background) = background.filter(|color| color.0 != Color::NONE) {
+                background.0.set_alpha(alpha);
+            }
+            if let Some(mut border) = border.filter(|color| color.top != Color::NONE) {
+                let color = border.top.with_alpha(alpha);
+                border.set_all(color);
+            }
+            if let Some(mut text) = text {
+                text.0.set_alpha(alpha);
+            }
+        }
+        if alpha == 1. {
+            commands.entity(entity).remove::<Reveal>();
+        }
+    }
+}
+
+/// Grows or shrinks shops smoothly to fit their content.
+fn fit_shops(
+    time: Res<Time>,
+    mut shops: Query<(&mut ShownHeight, &mut Node, &ComputedNode)>,
+) {
+    for (mut shown, mut node, computed) in &mut shops {
+        let height = (computed.content_size.y
+            + computed.border.min_inset.y
+            + computed.border.max_inset.y)
+            * computed.inverse_scale_factor;
+        if shown.0 != height {
+            shown.0.smooth_nudge(&height, 10., time.delta_secs());
+            if (height - shown.0).abs() < 1. {
+                shown.0 = height;
+            }
+            node.max_height = px(shown.0);
+        }
     }
 }
 

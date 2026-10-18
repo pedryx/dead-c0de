@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 
-use super::cpu::{STARTING_CPU, STARTING_PROGRAM, cpu};
+use super::{
+    cpu::{STARTING_CPU, STARTING_PROGRAM, cpu},
+    progression::progression,
+};
 use crate::{
     interaction::Draggable,
     visuals::{board::board_visuals, cpu::Grid},
@@ -27,7 +30,7 @@ fn board() -> impl Scene {
         #Board
         Board
         @board_visuals()
-        Children [ @cpu(STARTING_CPU, 0, &STARTING_PROGRAM) ]
+        Children [ @cpu(STARTING_CPU, 0, &STARTING_PROGRAM) Children [ @progression() ] ]
     }
 }
 

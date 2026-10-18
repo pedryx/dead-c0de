@@ -21,7 +21,7 @@ pub fn plugin(app: &mut App) {
     app.add_systems(Update, advance_jobs);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Opcode {
     Add,
     Mul,
