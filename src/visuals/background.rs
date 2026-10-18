@@ -53,7 +53,10 @@ fn trace() -> impl Scene {
         path.push(point);
         heading += if rng.random_bool(0.5) { 1 } else { -1 };
     }
-    let segments: Vec<_> = path.windows(2).map(|ends| segment(ends[0], ends[1])).collect();
+    let segments: Vec<_> = path
+        .windows(2)
+        .map(|ends| segment(ends[0], ends[1]))
+        .collect();
     let pads: Vec<_> = [path[0], point]
         .into_iter()
         .map(|point| rectangle(PAD, point.extend(-19.), Vec2::splat(PAD_SIZE)))

@@ -29,12 +29,12 @@ pub fn plugin(app: &mut App) {
             fit_shops,
         ),
     )
-        .add_observer(highlight_slot)
-        .add_observer(unhighlight_slot)
-        .add_observer(play_lift_sound)
-        .add_observer(play_drop_sound)
-        .add_observer(play_buy_sound)
-        .add_observer(play_cannot_afford_sound);
+    .add_observer(highlight_slot)
+    .add_observer(unhighlight_slot)
+    .add_observer(play_lift_sound)
+    .add_observer(play_drop_sound)
+    .add_observer(play_buy_sound)
+    .add_observer(play_cannot_afford_sound);
 }
 
 /// Texts of a shop card.
@@ -249,15 +249,11 @@ fn reveal(
 }
 
 /// Grows or shrinks shops smoothly to fit their content.
-fn fit_shops(
-    time: Res<Time>,
-    mut shops: Query<(&mut ShownHeight, &mut Node, &ComputedNode)>,
-) {
+fn fit_shops(time: Res<Time>, mut shops: Query<(&mut ShownHeight, &mut Node, &ComputedNode)>) {
     for (mut shown, mut node, computed) in &mut shops {
-        let height = (computed.content_size.y
-            + computed.border.min_inset.y
-            + computed.border.max_inset.y)
-            * computed.inverse_scale_factor;
+        let height =
+            (computed.content_size.y + computed.border.min_inset.y + computed.border.max_inset.y)
+                * computed.inverse_scale_factor;
         if shown.0 != height {
             shown.0.smooth_nudge(&height, 10., time.delta_secs());
             if (height - shown.0).abs() < 1. {
