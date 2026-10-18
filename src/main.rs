@@ -2,6 +2,8 @@
 #![cfg_attr(not(feature = "dev"), windows_subsystem = "windows")]
 
 mod game;
+mod interaction;
+mod visuals;
 
 use bevy::{asset::AssetMetaCheck, prelude::*};
 
@@ -30,7 +32,7 @@ impl Plugin for AppPlugin {
                 }),
         );
 
-        app.add_plugins(game::plugin);
+        app.add_plugins((game::plugin, interaction::plugin, visuals::plugin));
 
         app.insert_resource(ClearColor(Color::srgb_u8(0x45, 0x2b, 0x1d)));
 

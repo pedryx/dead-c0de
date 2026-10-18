@@ -3,4 +3,8 @@
     "workbench.editor.customLabels.patterns": {
         "**/mod.rs": "${dirname}/mod.rs"
     },
+    "cSpell.words": [
+        "rrggbb",
+        "rrggbbaa"
+    ],
 }
