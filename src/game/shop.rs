@@ -1,8 +1,8 @@
-use bevy::prelude::*;
+use bevy::{picking::hover::HoverMap, prelude::*};
 
 use super::{
     board::{Board, BoardSlot, make_room},
-    cpu::{Cpu, Instruction, Opcode, Rom, RomSlot, cpu},
+    cpu::{Cpu, Instruction, Job, Opcode, Rom, RomSlot, cpu},
     currencies::Currencies,
     progression::{Locked, Unlock},
 };
@@ -22,6 +22,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, allow_dragging)
         .add_observer(decline_drag)
         .add_observer(buy_instruction)
+        .add_observer(buy_loop)
         .add_observer(show_ghost)
         .add_observer(hide_ghost)
         .add_observer(buy_cpu);
@@ -31,12 +32,22 @@ pub fn plugin(app: &mut App) {
 #[derive(Component, Clone, Copy)]
 pub enum Offer {
     Instruction(Instruction),
+    /// Makes a CPU run its program forever, without taking a ROM slot.
+    Loop,
+    /// Raises the value of the instruction with the opcode on sale by 1.
+    Upgrade(Opcode),
     Cpu(Cpu),
     /// Refreshes the CPUs in hardware store.
     Reroll,
+    /// Improves the CPUs in hardware store and rerolls them.
+    ShopUpgrade,
     /// Bought CPU, leaving its card empty until the next reroll.
     Sold,
 }
+
+/// Shop upgrades bought, improving the CPUs on sale.
+#[derive(Component, Clone, Default)]
+struct ShopLevel(usize);
 
 /// Cost in USD, doubles with every purchase.
 #[derive(Component, Clone, Default)]
@@ -64,6 +75,17 @@ fn instruction_shop() -> impl Scene {
         --
         @shop_item(Offer::Instruction(Instruction(Opcode::Mul, 2)), 30)
         Locked({vec![Unlock::Usd(20), Unlock::Instructions(Opcode::Add, 3)]})
+        --
+        @shop_item(Offer::Loop, 150)
+        Locked({vec![Unlock::Usd(60)]})
+        --
+        @shop_item(Offer::Upgrade(Opcode::Add), 40)
+        Locked({vec![Unlock::Cpus(2)]})
+        on(upgrade_instruction)
+        --
+        @shop_item(Offer::Upgrade(Opcode::Mul), 100)
+        Locked({vec![Unlock::Cpus(2)]})
+        on(upgrade_instruction)
     };
     bsn! { #InstructionShop Locked({vec![Unlock::Usd(3)]}) @instruction_shop_visuals(cards) }
 }
@@ -72,26 +94,28 @@ fn instruction_shop() -> impl Scene {
 fn hardware_shop() -> impl Scene {
     let cards = (0..CPU_OFFERS)
         .map(|_| {
-            let cpu = Cpu::random();
+            let cpu = Cpu::random(0);
             shop_item(Offer::Cpu(cpu), cpu_price(cpu, 1))
         })
         .collect::<Vec<_>>();
+    let buttons = bsn_list! {
+        @shop_item(Offer::Reroll, 10) on(restock)
+        --
+        @shop_item(Offer::ShopUpgrade, 150)
+        Locked({vec![Unlock::Cpus(2)]})
+        on(restock)
+    };
     bsn! {
         #HardwareShop
+        ShopLevel
         Locked({vec![Unlock::Usd(50), Unlock::FullRom]})
-        @hardware_shop_visuals(cards, reroll_button())
+        @hardware_shop_visuals(cards, buttons)
     }
 }
 
 /// Card selling `offer` for `price` USD.
 fn shop_item(offer: Offer, price: u64) -> impl Scene {
     bsn! { offer Price(price) @shop_item_visuals() }
-}
-
-/// Button rerolling the CPUs on sale.
-fn reroll_button() -> impl Scene {
-    let reroll = Offer::Reroll;
-    bsn! { reroll Price(10) on(reroll_cpus) @shop_item_visuals() }
 }
 
 /// Price of `cpu`, higher for more ROM and clock, doubled for each owned CPU.
@@ -116,7 +140,7 @@ fn allow_dragging(
     offers: Query<(Entity, &Offer, Ref<Price>)>,
 ) {
     for (card, offer, price) in &offers {
-        if let Offer::Instruction(_) | Offer::Cpu(_) = offer
+        if let Offer::Instruction(_) | Offer::Loop | Offer::Cpu(_) = offer
             && (currencies.is_changed() || price.is_changed())
         {
             if currencies.usd >= price.0 {
@@ -134,7 +158,7 @@ fn decline_drag(
     mut commands: Commands,
     offers: Query<&Offer, Without<Draggable>>,
 ) {
-    if let Ok(Offer::Instruction(_) | Offer::Cpu(_)) = offers.get(drag.entity) {
+    if let Ok(Offer::Instruction(_) | Offer::Loop | Offer::Cpu(_)) = offers.get(drag.entity) {
         commands.trigger(CannotAfford { card: drag.entity });
     }
 }
@@ -167,6 +191,35 @@ fn buy_instruction(
         commands.trigger(CannotAfford { card });
     }
     Ok(())
+}
+
+/// Buys the loop dropped on a CPU that doesn't loop yet and starts its program.
+fn buy_loop(
+    drop: On<PointerDragDrop>,
+    mut commands: Commands,
+    mut offers: Query<(&Offer, &mut Price), With<Draggable>>,
+    mut cpus: Query<&mut Cpu>,
+    mut currencies: Single<&mut Currencies>,
+) {
+    let (card, cpu_entity) = (drop.dropped, drop.entity);
+    let (Ok((Offer::Loop, mut price)), Ok(mut cpu)) =
+        (offers.get_mut(card), cpus.get_mut(cpu_entity))
+    else {
+        return;
+    };
+    if cpu.looping {
+        return;
+    }
+    if pay(&mut currencies, &mut price) {
+        cpu.looping = true;
+        commands.entity(cpu_entity).insert_if_new(Job(0.));
+        commands.trigger(Purchased {
+            card,
+            offer: Offer::Loop,
+        });
+    } else {
+        commands.trigger(CannotAfford { card });
+    }
 }
 
 /// Shows a ghost of the dragged CPU in the board slot nearest the pointer.
@@ -206,14 +259,23 @@ fn show_ghost(
     }
 }
 
-/// Removes the ghost once the dragged CPU leaves the board.
+/// Removes the ghost once the dragged CPU leaves the board, not when it moves onto its CPUs.
 fn hide_ghost(
     leave: On<PointerDragLeave>,
     mut commands: Commands,
+    hover_map: Res<HoverMap>,
+    parents: Query<&ChildOf>,
     mut boards: Query<&mut Board>,
     mut slots: Query<(Entity, &mut BoardSlot)>,
 ) {
-    if let Ok(mut board) = boards.get_mut(leave.entity)
+    let board_entity = leave.entity;
+    let over_board = hover_map.get(&leave.pointer.id).is_some_and(|hovered| {
+        hovered
+            .keys()
+            .any(|&entity| parents.iter_ancestors(entity).any(|parent| parent == board_entity))
+    });
+    if !over_board
+        && let Ok(mut board) = boards.get_mut(board_entity)
         && let Some(ghost) = board.ghost.take()
     {
         remove_ghost(&mut commands, &mut slots, ghost);
@@ -276,29 +338,60 @@ fn remove_ghost(
     commands.entity(ghost).despawn();
 }
 
-/// Rerolls all CPUs in the hardware shop.
-fn reroll_cpus(
+/// Rerolls all CPUs in the hardware shop, improving them first for a shop upgrade.
+fn restock(
     click: On<PointerClick>,
     mut commands: Commands,
     mut offers: Query<(&mut Offer, &mut Price)>,
     cpus: Query<(), With<Cpu>>,
+    mut level: Single<&mut ShopLevel>,
     mut currencies: Single<&mut Currencies>,
 ) -> Result {
-    let (card, (_, mut price)) = (click.entity, offers.get_mut(click.entity)?);
+    let (card, (offer, mut price)) = (click.entity, offers.get_mut(click.entity)?);
+    let offer = *offer;
+    if !pay(&mut currencies, &mut price) {
+        commands.trigger(CannotAfford { card });
+        return Ok(());
+    }
+    commands.trigger(Purchased { card, offer });
+    if let Offer::ShopUpgrade = offer {
+        level.0 += 1;
+    }
+    let owned = cpus.iter().count();
+    for (mut offer, mut price) in &mut offers {
+        if let Offer::Cpu(_) | Offer::Sold = *offer {
+            let cpu = Cpu::random(level.0);
+            *offer = Offer::Cpu(cpu);
+            price.0 = cpu_price(cpu, owned);
+        }
+    }
+    Ok(())
+}
+
+/// Raises the value of the instruction on sale with the clicked upgrade's opcode.
+fn upgrade_instruction(
+    click: On<PointerClick>,
+    mut commands: Commands,
+    mut offers: Query<(&mut Offer, &mut Price)>,
+    mut currencies: Single<&mut Currencies>,
+) -> Result {
+    let (card, (offer, mut price)) = (click.entity, offers.get_mut(click.entity)?);
+    let Offer::Upgrade(upgraded) = *offer else {
+        return Ok(());
+    };
     if !pay(&mut currencies, &mut price) {
         commands.trigger(CannotAfford { card });
         return Ok(());
     }
     commands.trigger(Purchased {
         card,
-        offer: Offer::Reroll,
+        offer: Offer::Upgrade(upgraded),
     });
-    let owned = cpus.iter().count();
-    for (mut offer, mut price) in &mut offers {
-        if let Offer::Cpu(_) | Offer::Sold = *offer {
-            let cpu = Cpu::random();
-            *offer = Offer::Cpu(cpu);
-            price.0 = cpu_price(cpu, owned);
+    for (mut offer, _) in &mut offers {
+        if let Offer::Instruction(Instruction(opcode, value)) = &mut *offer
+            && *opcode == upgraded
+        {
+            *value += 1;
         }
     }
     Ok(())

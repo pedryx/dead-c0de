@@ -11,8 +11,11 @@ pub const STARTING_CPU: Cpu = Cpu {
     model: "DC4004",
     rom_size: 4,
     clock: 1.,
+    looping: false,
 };
 pub const STARTING_PROGRAM: [Instruction; 1] = [Instruction(Opcode::Add, 1)];
+/// Largest ROM a CPU fits on the board with.
+const MAX_ROM: usize = 6;
 const MODEL_NAMES: [&str; 8] = [
     "DC4004", "DC8008", "DC8080", "DC6502", "DC6800", "DC8086", "DC1802", "DC2650",
 ];
@@ -40,16 +43,19 @@ pub struct Cpu {
     pub rom_size: usize,
     /// Program runs per second.
     pub clock: f32,
+    /// Runs its program again after each run.
+    pub looping: bool,
 }
 
 impl Cpu {
-    /// Create a random CPU.
-    pub fn random() -> Self {
+    /// Create a random CPU, better with each shop `level`.
+    pub fn random(level: usize) -> Self {
         let mut rng = rand::rng();
         Cpu {
             model: MODEL_NAMES[rng.random_range(0..MODEL_NAMES.len())],
-            rom_size: rng.random_range(2..=6),
-            clock: rng.random_range(2..=8) as f32 / 4.,
+            rom_size: rng.random_range((2 + level).min(MAX_ROM)..=MAX_ROM),
+            clock: (rng.random_range(2..=8) + level) as f32 / 4.,
+            looping: false,
         }
     }
 }
@@ -167,7 +173,11 @@ fn advance_jobs(
                     Opcode::Mul => total * value,
                 });
         currencies.usd += usd;
-        commands.entity(entity).remove::<Job>();
+        if cpu.looping {
+            job.0 -= 1.;
+        } else {
+            commands.entity(entity).remove::<Job>();
+        }
         commands.trigger(ProgramFinished { cpu: entity, usd });
     }
 }

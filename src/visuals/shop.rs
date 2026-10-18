@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use super::{AMBER, BEZEL, DIM, GREEN, ROW, RUST, SCREEN, hex, sound, sound_with_volume};
 use crate::{
     game::{
-        cpu::{Rom, RomSlot},
+        cpu::{Cpu, Rom, RomSlot},
         currencies::Currencies,
         progression::Locked,
         shop::{CannotAfford, Offer, Price, Purchased},
@@ -31,6 +31,8 @@ pub fn plugin(app: &mut App) {
     )
     .add_observer(highlight_slot)
     .add_observer(unhighlight_slot)
+    .add_observer(highlight_cpu)
+    .add_observer(unhighlight_cpu)
     .add_observer(play_lift_sound)
     .add_observer(play_drop_sound)
     .add_observer(play_buy_sound)
@@ -48,7 +50,7 @@ struct ShopItemText {
 
 /// Seconds the shop or card has been fading in since it was unlocked.
 #[derive(Component, Default, Clone)]
-struct Reveal(f32);
+pub struct Reveal(f32);
 
 /// Height the shop is shown at, in pixels, following its content as it grows.
 #[derive(Component, Default, Clone)]
@@ -67,13 +69,13 @@ pub fn instruction_shop_visuals(cards: impl SceneList) -> impl Scene {
 }
 
 /// CPU shop window on the left.
-pub fn hardware_shop_visuals(cards: impl SceneList, reroll: impl Scene) -> impl Scene {
+pub fn hardware_shop_visuals(cards: impl SceneList, buttons: impl SceneList) -> impl Scene {
     let body = bsn_list! {
         @caption("CPUS")
         --
         {cards}
         --
-        @reroll
+        {buttons}
         --
         @caption("drag a CPU onto the board to buy it")
     };
@@ -160,11 +162,14 @@ fn label_cards(
         };
         let (name, detail) = match offer {
             Offer::Instruction(instruction) => (instruction.to_string(), String::new()),
+            Offer::Loop => ("LOOP".into(), String::new()),
+            Offer::Upgrade(opcode) => (format!("{opcode} UPGRADE"), String::new()),
             Offer::Cpu(cpu) => (
                 cpu.model.into(),
                 format!("\nROM {}  {}Hz", cpu.rom_size, cpu.clock),
             ),
             Offer::Reroll => ("REROLL".into(), String::new()),
+            Offer::ShopUpgrade => ("SHOP UPGRADE".into(), String::new()),
             Offer::Sold => continue,
         };
         names.get_mut(card.name)?.0 = name;
@@ -306,6 +311,41 @@ fn unhighlight_slot(leave: On<PointerDragLeave>, mut slots: Query<&mut Sprite, W
     }
 }
 
+/// Highlights the whole ROM of a CPU that doesn't loop yet when a loop is dragged over it.
+fn highlight_cpu(
+    enter: On<PointerDragEnter>,
+    offers: Query<&Offer>,
+    cpus: Query<(&Cpu, &Children)>,
+    mut slots: Query<&mut Sprite, With<RomSlot>>,
+) {
+    if let (Ok(Offer::Loop), Ok((cpu, children))) =
+        (offers.get(enter.dragged), cpus.get(enter.entity))
+        && !cpu.looping
+    {
+        paint_rom(children, &mut slots, SLOT_HIGHLIGHT);
+    }
+}
+
+fn unhighlight_cpu(
+    leave: On<PointerDragLeave>,
+    offers: Query<&Offer>,
+    cpus: Query<&Children, With<Cpu>>,
+    mut slots: Query<&mut Sprite, With<RomSlot>>,
+) {
+    if let (Ok(Offer::Loop), Ok(children)) = (offers.get(leave.dragged), cpus.get(leave.entity)) {
+        paint_rom(children, &mut slots, ROW);
+    }
+}
+
+/// Paints the ROM slots among `children` with `color`.
+fn paint_rom(children: &Children, slots: &mut Query<&mut Sprite, With<RomSlot>>, color: Color) {
+    for child in children.iter() {
+        if let Ok(mut sprite) = slots.get_mut(child) {
+            sprite.color = color;
+        }
+    }
+}
+
 fn play_lift_sound(
     drag: On<PointerDragStart>,
     mut commands: Commands,
@@ -329,8 +369,9 @@ fn play_drop_sound(
 /// Plays a sound for what was bought.
 fn play_buy_sound(purchased: On<Purchased>, mut commands: Commands) {
     commands.spawn_scene(match purchased.offer {
-        Offer::Instruction(_) => sound_with_volume("audio/program.wav", 0.7),
+        Offer::Instruction(_) | Offer::Loop => sound_with_volume("audio/program.wav", 0.7),
         Offer::Cpu(_) => sound_with_volume("audio/install.wav", 0.4),
+        Offer::Upgrade(_) | Offer::ShopUpgrade => sound_with_volume("audio/upgrade.wav", 0.6),
         Offer::Reroll | Offer::Sold => sound_with_volume("audio/reroll.wav", 0.4),
     });
 }

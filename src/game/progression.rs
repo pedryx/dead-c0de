@@ -1,13 +1,17 @@
 use bevy::prelude::*;
 
 use super::{
-    cpu::{Instruction, Opcode, ProgramFinished, ProgramStarted, Rom},
+    cpu::{Cpu, Instruction, Opcode, ProgramFinished, ProgramStarted, Rom},
     currencies::Currencies,
 };
-use crate::visuals::progression::progression_visuals;
+use crate::visuals::progression::{goal_visuals, progression_visuals, victory_visuals};
+
+/// USD the player has to hold to win.
+pub const GOAL_USD: u64 = 1_000;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, unlock)
+    app.add_systems(Startup, goal.spawn())
+        .add_systems(Update, (unlock, win))
         .add_observer(start_first_run)
         .add_observer(finish_run);
 }
@@ -25,6 +29,8 @@ pub enum Unlock {
     FullRom,
     /// CPUs hold this many instructions with the opcode.
     Instructions(Opcode, usize),
+    /// Player owns this many CPUs.
+    Cpus(usize),
 }
 
 /// How far the player got.
@@ -46,11 +52,31 @@ pub fn progression() -> impl Scene {
     bsn! { #Progression Progression @progression_visuals() }
 }
 
+/// Goal hint, shown once the player owns a second CPU.
+fn goal() -> impl Scene {
+    bsn! { #Goal Locked({vec![Unlock::Cpus(2)]}) @goal_visuals() }
+}
+
+/// Shows the victory once the player holds the goal USD.
+fn win(
+    time: Res<Time>,
+    mut commands: Commands,
+    currencies: Single<&Currencies>,
+    mut won: Local<bool>,
+) {
+    if !*won && currencies.usd >= GOAL_USD {
+        *won = true;
+        let seconds = time.elapsed_secs();
+        commands.spawn_scene(bsn! { #Victory @victory_visuals(seconds) });
+    }
+}
+
 /// Unlocks mechanics gated behind usd.
 fn unlock(
     mut commands: Commands,
     currencies: Single<&Currencies>,
     roms: Query<&Rom>,
+    cpus: Query<(), With<Cpu>>,
     locked: Query<(Entity, &Locked)>,
 ) {
     for (entity, locked) in &locked {
@@ -66,6 +92,7 @@ fn unlock(
                     .count()
                     >= *count
             }
+            Unlock::Cpus(count) => cpus.iter().count() >= *count,
         });
         if met {
             commands.entity(entity).remove::<Locked>();

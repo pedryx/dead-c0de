@@ -43,7 +43,7 @@ const CELL_SIZE: Vec2 = vec2(300., 440.);
 const CENTER: Vec2 = vec2(0., -155.);
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, (show_program, show_progress, place_cpus));
+    app.add_systems(Update, (show_program, show_progress, show_loop, place_cpus));
 }
 
 /// Screen text showing the program, one line per ROM slot.
@@ -60,7 +60,7 @@ struct Shake(f32);
 
 /// CPU chip with its model and clock, wired to a green screen showing its program.
 pub fn cpu_visuals(cpu: Cpu) -> impl Scene {
-    let screen_height = ROW_SPACING * cpu.rom_size as f32 + 28.;
+    let screen_height = screen_height(cpu);
     let program_y = (row_y(0) + row_y(cpu.rom_size - 1)) / 2.;
     let chip_label = format!("{}\n{}Hz", cpu.model, cpu.clock);
     let rom_label = format!("ROM {}", cpu.rom_size);
@@ -200,18 +200,28 @@ fn pin(index: usize) -> impl Scene {
     }
 }
 
+fn screen_height(cpu: Cpu) -> f32 {
+    ROW_SPACING * cpu.rom_size as f32 + 28.
+}
+
 fn row_y(slot: usize) -> f32 {
     -151. - ROW_SPACING * slot as f32
+}
+
+/// Opcode as written in ROM, like `ADD`.
+impl std::fmt::Display for Opcode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Opcode::Add => "ADD",
+            Opcode::Mul => "MUL",
+        })
+    }
 }
 
 /// Instruction as written in ROM, like `ADD 1`.
 impl std::fmt::Display for Instruction {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         let Instruction(opcode, value) = self;
-        let opcode = match opcode {
-            Opcode::Add => "ADD",
-            Opcode::Mul => "MUL",
-        };
         write!(formatter, "{opcode} {value}")
     }
 }
@@ -258,6 +268,18 @@ fn show_program(
         texts.get_mut(program_text.0)?.0 = lines.join("\n");
     }
     Ok(())
+}
+
+/// Labels CPUs that run their program forever.
+fn show_loop(mut commands: Commands, cpus: Query<(Entity, &Cpu), Changed<Cpu>>) {
+    for (entity, cpu) in &cpus {
+        if cpu.looping {
+            let label = text("LOOP", GREEN, 12., vec2(44., -139. - screen_height(*cpu)));
+            commands
+                .entity(entity)
+                .queue_spawn_related_scenes::<Children>(bsn_list! { @label });
+        }
+    }
 }
 
 /// Fills the progress bar while the program runs.
