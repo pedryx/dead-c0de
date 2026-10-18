@@ -13,7 +13,7 @@ concurrency:
 env:
   RUSTFLAGS: -Dwarnings -Zshare-generics=y -Zthreads=0
   RUSTDOCFLAGS: -Dwarnings -Zshare-generics=y -Zthreads=0
-  toolchain: nightly-2026-04-16
+  toolchain: nightly-2026-06-28
 
 jobs:
   format:
@@ -114,7 +114,7 @@ jobs:
         run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
 
       - name: Run Bevy lints
-        run: bevy_lint --locked --workspace --all-targets --profile ci --all-features
+        run: bevy_lint --locked --ignore-rust-version --workspace --all-targets --profile ci --all-features
 
   tests:
     name: Tests
